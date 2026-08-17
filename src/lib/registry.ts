@@ -59,7 +59,7 @@ interface DownloadsPoint {
 
 const REGISTRY = "https://registry.npmjs.org";
 const MAX_NODES = 46; // keep the force graph renderable
-const DIRECT_DEP_BUDGET = 6; // direct deps to include in the graph
+const DIRECT_DEP_BUDGET = 12; // direct deps to include in the graph + HydraDB edges
 const EXPAND_DIRECT = 4; // direct deps whose metadata we fetch (depth-2 expansion + maintainers)
 const TRANSITIVE_PER_DEP = 3;
 

@@ -55,7 +55,7 @@ docker run --rm \
   ghcr.io/hydra-db/hydradb:latest
 ```
 
-**From source:**
+**From source (Linux/macOS only):**
 
 ```bash
 git clone https://github.com/hydra-db/hydradb.git
@@ -71,6 +71,20 @@ Then start the app and point it at the node:
 cp .env.example .env.local   # defaults already match the dev node above
 npm run dev
 ```
+
+### No Docker on your machine?
+
+Two options:
+
+- **Local dev stand-in (any OS):** `node scripts/mock-hydradb.mjs` runs an in-memory
+  server implementing the exact HydraDB HTTP query contract for the statements this
+  app sends — including the transitive reverse closure — so you can develop and
+  rehearse the demo with non-zero exposure results. It is **a development stand-in,
+  not HydraDB**: point the app at it with `HYDRADB_URL=http://127.0.0.1:8444` (see
+  `.env.local`), and swap in the real node for the actual demo.
+- **Real node on any Docker-capable machine:** run `bash scripts/hydradb-node.sh`
+  on a Linux box, WSL, or a free GitHub Codespace (Docker preinstalled), then point
+  the app at it via `HYDRADB_URL`. The same code path runs against HydraDB itself.
 
 ### Configure
 
