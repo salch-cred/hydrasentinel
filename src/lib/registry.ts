@@ -8,6 +8,9 @@
  *   4. returns a renderable graph + stats and a human-readable traversal log
  */
 
+import type { Typosquat } from "@/lib/typosquat";
+import { findTyposquats } from "@/lib/typosquat";
+
 export interface TraverseNode {
   id: string;
   group: 1 | 2 | 3;
@@ -30,7 +33,13 @@ export interface TraverseStats {
 }
 
 export interface TraverseResult {
-  target: { name: string; version: string; description?: string; maintainers: string[] };
+  target: {
+    name: string;
+    version: string;
+    description?: string;
+    maintainers: string[];
+    typosquats?: Typosquat[];
+  };
   nodes: TraverseNode[];
   links: TraverseLink[];
   stats: TraverseStats;
@@ -96,6 +105,12 @@ export async function traversePackage(
     .filter((m): m is string => typeof m === "string");
   const deps = meta.dependencies ?? {};
   const directCount = Object.keys(deps).length;
+  const typosquats = findTyposquats(name);
+  if (typosquats.length > 0) {
+    log(
+      `hydradb: ⚠ ${name} is within ${typosquats[0].distance} edit${typosquats[0].distance === 1 ? "" : "s"} of "${typosquats[0].name}" — possible typosquat`
+    );
+  }
   log(`hydradb: resolved ${name}@${version} — ${directCount} direct dependenc${directCount === 1 ? "y" : "ies"}`);
   pushNode({ id: name, group: 1, val: 20, name, version });
 
@@ -158,7 +173,13 @@ export async function traversePackage(
   log(`hydradb: traversal complete in ${timeMs}ms — ${nodes.length} nodes, ${links.length} edges`);
 
   return {
-    target: { name, version, description, maintainers },
+    target: {
+      name,
+      version,
+      description,
+      maintainers,
+      ...(typosquats.length > 0 ? { typosquats } : {}),
+    },
     nodes,
     links,
     stats: {

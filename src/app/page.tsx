@@ -24,6 +24,7 @@ import {
   ZapIcon,
 } from "hugeicons-react";
 import type { TraverseResult } from "@/lib/registry";
+import type { IncidentReport } from "@/lib/incident";
 import { severityOf } from "@/lib/severity";
 import { saveReport } from "@/lib/reports";
 import DependencyGraph from "@/components/DependencyGraph";
@@ -57,6 +58,21 @@ type HydradbInfo = {
   reverse: string[];
   reverseDepth: number;
 };
+
+type IncidentState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "done"; data: IncidentReport }
+  | { status: "error"; error: string };
+
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 const QUICK_PICKS = ["react-dom", "left-pad", "lodash", "is-odd", "commander"];
 
@@ -116,6 +132,69 @@ function StatTile({
   );
 }
 
+function IncidentPanel({ report }: { report: IncidentReport }) {
+  const timeline = report.timeline.slice(-6);
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="mono-label text-clay-600">INCIDENT SIMULATION</p>
+        <span className="chip px-2.5 py-1 text-ink-700">
+          <Timer01Icon size={13} className="text-clay-600" />
+          window · {report.windowHours}h after publish
+        </span>
+      </div>
+
+      <p className="mt-3 font-display text-base font-bold leading-snug text-ink-900">
+        <span className="font-mono text-clay-600">
+          {report.target}@{report.badVersion}
+        </span>{" "}
+        was live {fmtDate(report.windowStart)} → {fmtDate(report.windowEnd)}
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span
+          className={`chip px-3 py-1.5 ${
+            report.exposedCount > 0 ? "text-moss-600" : "text-ink-400"
+          }`}
+        >
+          <ShieldEnergyIcon size={13} />
+          {report.hydradbConnected
+            ? report.exposedCount > 0
+              ? `${report.exposedCount} known depend${report.exposedCount === 1 ? "ent" : "ents"} exposed in window`
+              : "0 dependents in graph"
+            : "connect HydraDB to see exposure"}
+        </span>
+        {report.exposed.slice(0, 8).map((name) => (
+          <span key={name} className="chip px-2.5 py-1 text-ink-700">
+            {name}
+          </span>
+        ))}
+        {report.exposed.length > 8 && (
+          <span className="mono-label text-ink-400">+{report.exposed.length - 8} more</span>
+        )}
+      </div>
+
+      <div className="mt-4 rounded-xl border border-line bg-sand-100/60 p-3">
+        <p className="mono-label">real publish timeline · last {timeline.length} versions</p>
+        <ul className="mt-2 space-y-1">
+          {timeline.map((p) => (
+            <li key={p.version} className="flex items-baseline justify-between gap-3 text-[13px]">
+              <span
+                className={`font-mono ${
+                  p.version === report.badVersion ? "font-bold text-clay-600" : "text-ink-700"
+                }`}
+              >
+                {p.version}
+              </span>
+              <span className="text-ink-400">{fmtDate(p.publishedAt)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Page                                                                */
 /* ------------------------------------------------------------------ */
@@ -129,6 +208,7 @@ export default function Home() {
   const [runId, setRunId] = useState(0);
   const [telemetry, setTelemetry] = useState({ resolved: 0, downloads: 0, lastMs: 0, risky: 0 });
   const [hydradbInfo, setHydradbInfo] = useState<HydradbInfo | null>(null);
+  const [incident, setIncident] = useState<IncidentState>({ status: "idle" });
 
   const runAnalysis = async (name: string) => {
     const target = name.trim();
@@ -139,6 +219,7 @@ export default function Home() {
     setError(null);
     setLogLines([]);
     setHydradbInfo(null);
+    setIncident({ status: "idle" });
     setRunId((n) => n + 1);
 
     try {
@@ -195,6 +276,29 @@ export default function Home() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "network error during traversal");
       setPhase("error");
+    }
+  };
+
+  const simulateIncident = async () => {
+    if (!results || incident.status === "loading") return;
+    setIncident({ status: "loading" });
+    try {
+      const res = await fetch(
+        `/api/incident?package=${encodeURIComponent(results.target.name)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as {
+        ok: boolean;
+        report?: IncidentReport;
+        error?: string;
+      };
+      if (!json.ok || !json.report) throw new Error(json.error ?? "incident simulation failed");
+      setIncident({ status: "done", data: json.report });
+    } catch (err) {
+      setIncident({
+        status: "error",
+        error: err instanceof Error ? err.message : "simulation failed",
+      });
     }
   };
 
@@ -547,6 +651,17 @@ export default function Home() {
                           <FingerPrintScanIcon size={13} className="text-moss-600" />
                           {results.stats.sharedMaintainers} shared maintainer{results.stats.sharedMaintainers === 1 ? "" : "s"}
                         </span>
+                        {results.target.typosquats && results.target.typosquats.length > 0 && (
+                          <span
+                            className="chip px-3 py-1.5 text-clay-600"
+                            title={`Possible typosquats: ${results.target.typosquats
+                              .map((t) => `${t.name} (${t.distance} edit${t.distance === 1 ? "" : "s"})`)
+                              .join(", ")}`}
+                          >
+                            <AlertDiamondIcon size={13} />
+                            {results.target.typosquats.length} possible typosquat{results.target.typosquats.length === 1 ? "" : "s"}
+                          </span>
+                        )}
                         <span className="chip px-3 py-1.5 text-ink-700">
                           <Timer01Icon size={13} className="text-clay-600" />
                           traversal {results.stats.timeMs}ms
@@ -572,6 +687,19 @@ export default function Home() {
                         )}
                         <button
                           type="button"
+                          onClick={simulateIncident}
+                          disabled={incident.status === "loading"}
+                          className="chip px-3 py-1.5 text-clay-600 transition-all duration-300 hover:-translate-y-0.5 hover:border-clay-500/50 disabled:opacity-60"
+                        >
+                          {incident.status === "loading" ? (
+                            <Radar01Icon size={13} className="spin-slow" />
+                          ) : (
+                            <AlertDiamondIcon size={13} />
+                          )}
+                          {incident.status === "loading" ? "simulating…" : "Simulate incident"}
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => runAnalysis(results.target.name)}
                           className="chip ml-auto px-3 py-1.5 text-clay-600 transition-all duration-300 hover:-translate-y-0.5 hover:border-clay-500/50"
                         >
@@ -579,6 +707,34 @@ export default function Home() {
                           re-run
                         </button>
                       </div>
+
+                      {incident.status !== "idle" && (
+                        <div className="anim-rise mt-4 rounded-2xl border border-clay-500/30 bg-sand-100/70 p-4 sm:mt-5 sm:p-5">
+                          {incident.status === "loading" && (
+                            <p className="mono-label flex items-center gap-2">
+                              <Radar01Icon size={14} className="spin-slow text-clay-600" />
+                              simulating compromise…
+                            </p>
+                          )}
+                          {incident.status === "error" && (
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm text-ink-500">
+                                incident simulation failed — {incident.error}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={simulateIncident}
+                                className="clay-btn-ghost shrink-0 rounded-xl px-3 py-1.5 text-xs"
+                              >
+                                retry
+                              </button>
+                            </div>
+                          )}
+                          {incident.status === "done" && incident.data && (
+                            <IncidentPanel report={incident.data} />
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
