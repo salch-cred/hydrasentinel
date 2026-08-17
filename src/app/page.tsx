@@ -1,152 +1,673 @@
 "use client";
 
-import { useState } from "react";
-import { 
-  Search01Icon, 
-  Alert01Icon, 
-  Shield02Icon, 
-  NodeNetworkIcon,
-  ServerIcon,
-  Layers01Icon
+import { useState, type ReactNode } from "react";
+import Link from "next/link";
+import {
+  Activity01Icon,
+  AlertDiamondIcon,
+  ArrowRight01Icon,
+  ArrowUpRight01Icon,
+  Database02Icon,
+  Download04Icon,
+  FingerPrintScanIcon,
+  GitBranchIcon,
+  Layers01Icon,
+  PackageIcon,
+  PackageSearchIcon,
+  Radar01Icon,
+  RefreshIcon,
+  Search01Icon,
+  Shield02Icon,
+  ShieldEnergyIcon,
+  Target01Icon,
+  Timer01Icon,
+  ZapIcon,
 } from "hugeicons-react";
+import type { TraverseResult } from "@/lib/registry";
+import { severityOf } from "@/lib/severity";
+import { saveReport } from "@/lib/reports";
 import DependencyGraph from "@/components/DependencyGraph";
+import Header from "@/components/Header";
+import { BrandWordmark, HydraMark, IconTile } from "@/components/ui";
+import { CountUp, Reveal } from "@/components/motion";
+
+/* ------------------------------------------------------------------ */
+/*  Types & helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+type Phase = "idle" | "scanning" | "done" | "error";
+
+type StreamMsg =
+  | { type: "log"; message: string }
+  | ({ type: "result" } & TraverseResult)
+  | {
+      type: "hydradb";
+      connected: boolean;
+      packages: number;
+      edges: number;
+      reverse: string[];
+      reverseDepth: number;
+    }
+  | { type: "error"; message: string };
+
+type HydradbInfo = {
+  connected: boolean;
+  packages: number;
+  edges: number;
+  reverse: string[];
+  reverseDepth: number;
+};
+
+const QUICK_PICKS = ["react-dom", "left-pad", "lodash", "is-odd", "commander"];
+
+
+const MONITORED = [
+  "lodash",
+  "react-dom",
+  "express",
+  "commander",
+  "is-odd",
+  "chalk",
+  "axios",
+  "uuid",
+  "moment",
+  "debug",
+  "minimist",
+  "underscore",
+];
+
+
+/* ------------------------------------------------------------------ */
+/*  Small building blocks                                               */
+/* ------------------------------------------------------------------ */
+
+function StatTile({
+  icon,
+  label,
+  value,
+  suffix = "",
+  delta,
+  tone = "sand",
+  delay,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: number;
+  suffix?: string;
+  delta: string;
+  tone?: "sand" | "clay" | "moss";
+  delay: number;
+}) {
+  return (
+    <Reveal delay={delay}>
+      <div className="clay-card clay-lift h-full p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-2">
+          <IconTile tone={tone}>
+            <span className="p-2 sm:p-2.5">{icon}</span>
+          </IconTile>
+          <span className="chip whitespace-nowrap px-2 py-1 text-moss-600">{delta}</span>
+        </div>
+        <div className="mt-4 font-display text-2xl font-bold tracking-tight text-ink-900 sm:mt-5 sm:text-3xl">
+          <CountUp to={value} suffix={suffix} />
+        </div>
+        <div className="mono-label mt-1.5">{label}</div>
+      </div>
+    </Reveal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Page                                                                */
+/* ------------------------------------------------------------------ */
 
 export default function Home() {
   const [packageName, setPackageName] = useState("");
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [results, setResults] = useState<null | any>(null);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [results, setResults] = useState<TraverseResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [runId, setRunId] = useState(0);
+  const [telemetry, setTelemetry] = useState({ resolved: 0, downloads: 0, lastMs: 0, risky: 0 });
+  const [hydradbInfo, setHydradbInfo] = useState<HydradbInfo | null>(null);
 
-  const handleSimulate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!packageName) return;
-    
-    setIsSimulating(true);
-    // Simulate real data fetching delay
-    setTimeout(() => {
-      setResults({
-        target: packageName,
-        affectedServices: 14,
-        criticalPaths: 3,
-        maintainersShared: 2,
-        timeToCompromise: "12ms"
+  const runAnalysis = async (name: string) => {
+    const target = name.trim();
+    if (!target || phase === "scanning") return;
+    setPackageName(target);
+    setPhase("scanning");
+    setResults(null);
+    setError(null);
+    setLogLines([]);
+    setHydradbInfo(null);
+    setRunId((n) => n + 1);
+
+    try {
+      const res = await fetch(`/api/traverse?package=${encodeURIComponent(target)}`, {
+        cache: "no-store",
       });
-      setIsSimulating(false);
-    }, 1500);
+      if (!res.ok || !res.body) throw new Error(`traversal endpoint answered ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const raw of lines) {
+          if (!raw.trim()) continue;
+          let msg: StreamMsg;
+          try {
+            msg = JSON.parse(raw) as StreamMsg;
+          } catch {
+            continue;
+          }
+          if (msg.type === "log") {
+            setLogLines((prev) => [...prev, msg.message]);
+          } else if (msg.type === "result") {
+            setResults(msg);
+            setTelemetry((t) => ({
+              resolved: t.resolved + msg.nodes.length,
+              downloads: t.downloads + msg.stats.downloads,
+              lastMs: msg.stats.timeMs,
+              risky: t.risky + (severityOf(msg.stats.downloads) !== "moderate" ? 1 : 0),
+            }));
+            saveReport({
+              name: msg.target.name,
+              version: msg.target.version,
+              downloads: msg.stats.downloads,
+              directDeps: msg.stats.directDeps,
+              transitive: msg.stats.transitive,
+              sharedMaintainers: msg.stats.sharedMaintainers,
+              timeMs: msg.stats.timeMs,
+              at: Date.now(),
+            });
+            setPhase("done");
+          } else if (msg.type === "hydradb") {
+            setHydradbInfo(msg);
+          } else if (msg.type === "error") {
+            setError(msg.message);
+            setPhase("error");
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "network error during traversal");
+      setPhase("error");
+    }
   };
 
-  return (
-    <div className="min-h-screen p-8 md:p-12 lg:p-24 max-w-7xl mx-auto">
-      <header className="mb-16 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-clay-accent/10 flex items-center justify-center text-clay-accent">
-            <Shield02Icon size={24} />
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight">HydraSentinel</h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-clay-text-muted">Powered by HydraDB</span>
-        </div>
-      </header>
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    runAnalysis(packageName);
+  };
 
-      <main className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Left Column: Input and Stats */}
-        <div className="lg:col-span-4 space-y-6">
-          <div className="clay-card p-6">
-            <h2 className="text-lg font-semibold mb-2">Simulate Compromise</h2>
-            <p className="text-sm text-clay-text-muted mb-6">
-              Enter an npm or PyPI package to trace its transitive blast radius across the internal ecosystem.
-            </p>
-            
-            <form onSubmit={handleSimulate} className="space-y-4">
-              <div className="relative">
-                <Search01Icon className="absolute left-3 top-1/2 -translate-y-1/2 text-clay-text-muted" size={18} />
-                <input
-                  type="text"
-                  placeholder="e.g. react-dom, left-pad..."
-                  className="clay-input w-full pl-10 pr-4 py-2.5 text-sm"
-                  value={packageName}
-                  onChange={(e) => setPackageName(e.target.value)}
-                />
-              </div>
-              <button 
+  const scanning = phase === "scanning";
+  const severity = results ? severityOf(results.stats.downloads) : "moderate";
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      {/* ---------------------------------------------------------- */}
+      {/* Header                                                      */}
+      {/* ---------------------------------------------------------- */}
+      <Header />
+
+      <main className="mx-auto w-full max-w-6xl flex-1 px-5 pb-20">
+        {/* -------------------------------------------------------- */}
+        {/* Hero + search                                             */}
+        {/* -------------------------------------------------------- */}
+        <section className="pt-10 pb-10 text-center sm:pt-14 sm:pb-12 md:pt-20">
+          <div className="anim-rise d1 mx-auto mb-6 inline-flex max-w-full">
+            <span className="chip whitespace-nowrap px-3 py-1.5 text-[10px] text-ink-500 sm:px-3.5 sm:text-[11px]">
+              <Activity01Icon size={13} className="text-clay-600" />
+              <span className="sm:hidden">NPM REGISTRY · LIVE</span>
+              <span className="hidden sm:inline">NPM REGISTRY · LIVE TRAVERSAL</span>
+            </span>
+          </div>
+
+          <h1 className="anim-rise d2 mx-auto max-w-3xl font-display text-4xl font-bold leading-[1.05] tracking-tight text-ink-900 md:text-6xl">
+            One compromised package.{" "}
+            <span className="font-serif italic font-normal text-clay-600">Every</span> service it touches.
+          </h1>
+
+          <p className="anim-rise d3 mx-auto mt-5 max-w-xl text-base leading-relaxed text-ink-500 md:text-lg">
+            Trace the real blast radius of any npm package — resolve its dependency
+            tree, measure its weekly downloads, and flag maintainers shared across the
+            chain.
+          </p>
+
+          <form onSubmit={onSubmit} className="anim-rise d4 mx-auto mt-8 max-w-2xl sm:mt-9">
+            <div className="clay-field flex items-center gap-2.5 py-2 pl-4 pr-2 sm:gap-3 sm:pl-5">
+              <Search01Icon size={19} className="shrink-0 text-ink-400 sm:size-5" />
+              <input
+                type="text"
+                value={packageName}
+                onChange={(e) => setPackageName(e.target.value)}
+                placeholder="Search a package…"
+                className="min-w-0 flex-1 bg-transparent py-2.5 text-[15px] text-ink-900 placeholder:text-ink-400"
+                aria-label="Package name"
+              />
+              <button
                 type="submit"
-                disabled={isSimulating}
-                className="clay-button w-full py-2.5 flex justify-center items-center gap-2"
+                disabled={scanning || !packageName.trim()}
+                className="clay-btn flex shrink-0 items-center gap-1.5 px-4 py-3 text-sm sm:gap-2 sm:px-5"
               >
-                {isSimulating ? (
-                  <span className="animate-pulse">Traversing Graph...</span>
+                {scanning ? (
+                  <>
+                    <Radar01Icon size={17} className="spin-slow" />
+                    <span className="hidden sm:inline">Scanning</span>
+                  </>
                 ) : (
                   <>
-                    <NodeNetworkIcon size={18} />
-                    <span>Run Analysis</span>
+                    <span className="hidden sm:inline">Run analysis</span>
+                    <ArrowRight01Icon size={17} className="transition-transform duration-300" />
                   </>
                 )}
               </button>
-            </form>
-          </div>
+            </div>
+          </form>
 
-          {results && (
-            <div className="clay-card p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex items-center gap-2 text-red-500 mb-4">
-                <Alert01Icon size={20} />
-                <h3 className="font-semibold">Compromise Detected</h3>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 bg-red-50 rounded-xl border border-red-100">
-                  <div className="text-2xl font-bold text-red-600">{results.affectedServices}</div>
-                  <div className="text-xs text-red-500 font-medium">Affected Services</div>
-                </div>
-                <div className="p-4 bg-orange-50 rounded-xl border border-orange-100">
-                  <div className="text-2xl font-bold text-orange-600">{results.criticalPaths}</div>
-                  <div className="text-xs text-orange-500 font-medium">Critical Paths</div>
-                </div>
-              </div>
-              
-              <div className="mt-6 pt-6 border-t border-clay-border">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-clay-text-muted">Graph Traversal Time</span>
-                  <span className="font-mono font-medium">{results.timeToCompromise}</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right Column: Visualization */}
-        <div className="lg:col-span-8">
-          <div className="clay-card h-full min-h-[500px] flex flex-col overflow-hidden relative">
-            <div className="p-4 border-b border-clay-border flex justify-between items-center bg-white z-10">
-              <h2 className="font-medium text-sm">Transitive Dependency Map</h2>
-              <div className="flex gap-2">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                  <Layers01Icon size={14} /> Packages
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-600 border border-blue-100">
-                  <ServerIcon size={14} /> Internal Services
-                </span>
-              </div>
-            </div>
-            
-            <div className="flex-1 bg-clay-bg flex items-center justify-center relative">
-              {/* This is a placeholder for the actual force graph. We will integrate react-force-graph-2d next */}
-              {isSimulating ? (
-                <div className="text-clay-accent flex flex-col items-center gap-4 animate-pulse">
-                  <NodeNetworkIcon size={48} />
-                  <p className="text-sm font-medium">Querying HydraDB Core...</p>
-                </div>
-              ) : results ? (
-                <DependencyGraph targetPackage={results.target} />
-              ) : (
-                <div className="text-center max-w-sm text-clay-text-muted">
-                  <NodeNetworkIcon size={48} className="mx-auto mb-4 opacity-20" />
-                  <p className="text-sm">Awaiting target package to generate dependency blast radius map.</p>
-                </div>
-              )}
-            </div>
+          <div className="anim-rise d5 mt-4 flex flex-wrap items-center justify-center gap-1.5 sm:mt-5 sm:gap-2">
+            <span className="mono-label mr-1">try</span>
+            {QUICK_PICKS.map((pkg) => (
+              <button
+                key={pkg}
+                type="button"
+                onClick={() => runAnalysis(pkg)}
+                disabled={scanning}
+                className="chip px-3 py-1.5 text-ink-700 transition-all duration-300 hover:-translate-y-0.5 hover:border-clay-500/50 hover:text-clay-600 disabled:opacity-60"
+              >
+                <PackageIcon size={12} />
+                {pkg}
+              </button>
+            ))}
           </div>
-        </div>
+        </section>
+
+        {/* -------------------------------------------------------- */}
+        {/* Telemetry                                                  */}
+        {/* -------------------------------------------------------- */}
+        <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          <StatTile
+            delay={0}
+            icon={<Database02Icon size={20} />}
+            label="packages resolved"
+            value={telemetry.resolved}
+            delta="this session"
+            tone="sand"
+          />
+          <StatTile
+            delay={90}
+            icon={<PackageSearchIcon size={20} />}
+            label="downloads sampled"
+            value={telemetry.downloads}
+            delta="this session"
+            tone="moss"
+          />
+          <StatTile
+            delay={180}
+            icon={<Timer01Icon size={20} />}
+            label="last traversal"
+            value={telemetry.lastMs}
+            suffix=" ms"
+            delta="real-time"
+          />
+          <StatTile
+            delay={270}
+            icon={<AlertDiamondIcon size={20} />}
+            label="high-risk scans"
+            value={telemetry.risky}
+            delta="flagged"
+            tone="clay"
+          />
+        </section>
+
+        {/* -------------------------------------------------------- */}
+        {/* Workspace: graph + console + report                        */}
+        {/* -------------------------------------------------------- */}
+        <section id="explorer" className="mt-8 scroll-mt-24">
+          <Reveal delay={120}>
+            <div className="clay-card overflow-hidden">
+              {/* Workspace header */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5 sm:py-4">
+                <div className="flex items-center gap-3">
+                  <IconTile>
+                    <span className="p-2">
+                      <Radar01Icon size={18} />
+                    </span>
+                  </IconTile>
+                  <div>
+                    <h2 className="font-display text-base font-bold tracking-tight text-ink-900">
+                      Blast radius explorer
+                    </h2>
+                    <p className="mono-label mt-0.5 hidden md:block">live npm registry traversal</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {/* Legend */}
+                  <div className="hidden items-center gap-2 md:flex">
+                    <span className="chip px-2.5 py-1 text-clay-600">
+                      <Target01Icon size={13} /> target
+                    </span>
+                    <span className="chip px-2.5 py-1 text-ink-500">
+                      <PackageIcon size={13} /> packages
+                    </span>
+                    <span className="chip px-2.5 py-1 text-moss-600">
+                      <Layers01Icon size={13} /> transitive
+                    </span>
+                  </div>
+
+                  {/* Status badge */}
+                  {phase === "idle" && (
+                    <span className="chip whitespace-nowrap px-3 py-1.5 text-ink-400">STANDBY</span>
+                  )}
+                  {scanning && (
+                    <span className="chip whitespace-nowrap px-3 py-1.5 text-clay-600">
+                      <span className="h-1.5 w-1.5 rounded-full bg-clay-500 text-clay-500" />
+                      SCANNING
+                    </span>
+                  )}
+                  {phase === "done" && results && (
+                    <span
+                      className={`chip whitespace-nowrap px-3 py-1.5 ${
+                        severity === "moderate"
+                          ? "text-ochre-500"
+                          : "severity-pulse border-clay-500/40 text-clay-600"
+                      }`}
+                    >
+                      {severity === "moderate" ? <Radar01Icon size={13} /> : <AlertDiamondIcon size={13} />}
+                      {severity === "moderate" ? "MAPPED" : "COMPROMISED"}
+                    </span>
+                  )}
+                  {phase === "done" && hydradbInfo && (
+                    <span
+                      className={`chip whitespace-nowrap px-3 py-1.5 ${
+                        hydradbInfo.connected ? "text-moss-600" : "text-ink-400"
+                      }`}
+                    >
+                      {hydradbInfo.connected ? (
+                        <>
+                          <span className="h-1.5 w-1.5 rounded-full bg-moss-500 text-moss-500" />
+                          HYDRADB ONLINE
+                        </>
+                      ) : (
+                        "HYDRADB OFFLINE"
+                      )}
+                    </span>
+                  )}
+                  {phase === "error" && (
+                    <span className="chip whitespace-nowrap px-3 py-1.5 text-clay-600">
+                      <AlertDiamondIcon size={13} />
+                      ERROR
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Workspace body */}
+              <div className="relative">
+                {phase === "idle" && (
+                  <div className="flex min-h-[360px] flex-col items-center justify-center px-4 py-12 text-center sm:min-h-[440px] sm:px-6 sm:py-16">
+                    <div className="relative mb-8 h-36 w-36 sm:h-44 sm:w-44">
+                      <div className="radar-ring" style={{ animationDelay: "0s" }} />
+                      <div className="radar-ring" style={{ animationDelay: "1.1s" }} />
+                      <div className="radar-ring" style={{ animationDelay: "2.2s" }} />
+                      <div className="absolute inset-5 rounded-full border border-line-strong" />
+                      <div className="radar-sweep absolute inset-0" />
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="clay-btn-ghost floaty rounded-3xl p-4">
+                          <ShieldEnergyIcon size={34} className="text-clay-600" />
+                        </span>
+                      </div>
+                    </div>
+                    <p className="mono-label">awaiting target package</p>
+                    <p className="mt-3 max-w-sm text-sm leading-relaxed text-ink-500">
+                      Run an analysis or tap a suggested package. HydraSentinel resolves
+                      the package on the live npm registry and maps its dependency tree
+                      and real weekly downloads.
+                    </p>
+                  </div>
+                )}
+
+                {phase === "error" && (
+                  <div className="flex min-h-[360px] flex-col items-center justify-center px-4 py-12 text-center sm:min-h-[440px]">
+                    <span className="clay-btn-ghost rounded-2xl p-4">
+                      <AlertDiamondIcon size={30} className="text-clay-600" />
+                    </span>
+                    <p className="mono-label mt-5">traversal failed</p>
+                    <p className="mt-3 max-w-sm text-sm leading-relaxed text-ink-500">{error}</p>
+                    <button
+                      type="button"
+                      onClick={() => runAnalysis(packageName)}
+                      className="clay-btn-ghost mt-5 px-5 py-2.5 text-sm"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
+
+                {scanning && (
+                  <div className="min-h-[360px] px-4 py-8 sm:min-h-[440px] sm:px-6 sm:py-10">
+                    <div className="mx-auto max-w-2xl">
+                      <div className="flex items-center gap-3">
+                        <Radar01Icon size={20} className="spin-slow text-clay-600" />
+                        <div className="flex-1">
+                          <div className="flex items-baseline justify-between">
+                            <span className="font-display text-sm font-semibold text-ink-900">
+                              Traversing live registry graph
+                            </span>
+                            <span className="mono-label">{logLines.length} lines</span>
+                          </div>
+                          <div className="scan-bar mt-2.5 h-1.5" />
+                        </div>
+                      </div>
+
+                      <div className="mt-6 rounded-2xl border border-ink-900/10 bg-ink-900 p-5 font-mono text-[12.5px] leading-7 shadow-[inset_0_2px_6px_rgba(0,0,0,0.4)]">
+                        {logLines.map((line, i) => (
+                          <div key={i} className="log-line flex gap-2 text-sand-200/85">
+                            <span className="select-none text-clay-300">▸</span>
+                            <span>{line}</span>
+                          </div>
+                        ))}
+                        <div className="log-line flex items-center gap-2 text-sand-200/60">
+                          <span className="select-none text-clay-300">▸</span>
+                          <span>hydradb: traversing…</span>
+                          <span className="caret" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {phase === "done" && results && (
+                  <div className="anim-rise d1">
+                    <div className="relative h-[380px] w-full sm:h-[480px]">
+                      <DependencyGraph
+                        key={`${results.target.name}-${runId}`}
+                        data={{ nodes: results.nodes, links: results.links }}
+                      />
+                    </div>
+
+                    {/* Report strip */}
+                    <div className="border-t border-line bg-gradient-to-b from-[#fdfaf2] to-[#f6eedf] px-4 py-4 sm:px-6 sm:py-5">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                        <div className="flex items-center gap-4">
+                          <span
+                            className={`rounded-2xl p-3 text-[#fff7ee] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_8px_18px_-8px_rgba(178,68,26,0.7)] ${
+                              severity === "moderate"
+                                ? "bg-gradient-to-b from-[#8a7760] to-[#6e5c48]"
+                                : "severity-pulse bg-gradient-to-b from-[#e07042] to-[#b44824]"
+                            }`}
+                          >
+                            <AlertDiamondIcon size={22} />
+                          </span>
+                          <div>
+                            <div className="font-display text-lg font-bold leading-tight text-ink-900">
+                              {severity === "moderate" ? "Blast radius mapped" : "Compromise detected"} —{" "}
+                              {results.stats.downloads.toLocaleString("en-US")} weekly downloads
+                            </div>
+                            <p className="mt-0.5 text-sm text-ink-500">
+                              <span className="font-mono text-clay-600">
+                                {results.target.name}@{results.target.version}
+                              </span>{" "}
+                              is pulled {results.stats.downloads.toLocaleString("en-US")} times a week
+                              across {results.stats.directDeps} direct dependenc{results.stats.directDeps === 1 ? "y" : "ies"}.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-stretch gap-2.5 max-sm:w-full">
+                          <button type="button" className="clay-btn-ghost flex flex-1 items-center justify-center gap-2 px-4 py-2.5 text-sm sm:flex-none">
+                            <Download04Icon size={16} className="text-clay-600" />
+                            Report
+                          </button>
+                          <button type="button" className="clay-btn flex flex-1 items-center justify-center gap-2 px-4 py-2.5 text-sm sm:flex-none">
+                            Investigate
+                            <ArrowUpRight01Icon size={16} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2 sm:mt-5 sm:gap-2.5">
+                        <span className="chip px-3 py-1.5 text-ink-700">
+                          <ZapIcon size={13} className="text-ochre-500" />
+                          {results.stats.downloads.toLocaleString("en-US")} downloads / wk
+                        </span>
+                        <span className="chip px-3 py-1.5 text-ink-700">
+                          <GitBranchIcon size={13} className="text-clay-600" />
+                          {results.stats.directDeps} direct dependenc{results.stats.directDeps === 1 ? "y" : "ies"}
+                        </span>
+                        <span className="chip px-3 py-1.5 text-ink-700">
+                          <Layers01Icon size={13} className="text-clay-600" />
+                          {results.stats.transitive} transitive packages
+                        </span>
+                        <span className="chip px-3 py-1.5 text-ink-700">
+                          <FingerPrintScanIcon size={13} className="text-moss-600" />
+                          {results.stats.sharedMaintainers} shared maintainer{results.stats.sharedMaintainers === 1 ? "" : "s"}
+                        </span>
+                        <span className="chip px-3 py-1.5 text-ink-700">
+                          <Timer01Icon size={13} className="text-clay-600" />
+                          traversal {results.stats.timeMs}ms
+                        </span>
+                        {hydradbInfo?.connected && (
+                          <>
+                            <span className="chip px-3 py-1.5 text-ink-700">
+                              <Target01Icon size={13} className="text-clay-600" />
+                              HydraDB graph · {hydradbInfo.packages} pkgs · {hydradbInfo.edges} edges
+                            </span>
+                            <span
+                              className={`chip px-3 py-1.5 ${
+                                hydradbInfo.reverse.length > 0 ? "text-moss-600" : "text-ink-400"
+                              }`}
+                              title={`Packages in the HydraDB graph that depend on ${results.target.name} transitively (depth ≤ ${hydradbInfo.reverseDepth})`}
+                            >
+                              <ShieldEnergyIcon size={13} />
+                              {hydradbInfo.reverse.length > 0
+                                ? `${hydradbInfo.reverse.length} known depend${hydradbInfo.reverse.length === 1 ? "ent" : "ents"} exposed`
+                                : "0 dependents in graph"}
+                            </span>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => runAnalysis(results.target.name)}
+                          className="chip ml-auto px-3 py-1.5 text-clay-600 transition-all duration-300 hover:-translate-y-0.5 hover:border-clay-500/50"
+                        >
+                          <RefreshIcon size={13} />
+                          re-run
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Reveal>
+        </section>
+
+        {/* -------------------------------------------------------- */}
+        {/* How it works — small footnote row                          */}
+        {/* -------------------------------------------------------- */}
+        <section className="mt-6 grid gap-3 sm:mt-8 sm:gap-4 md:grid-cols-3">
+          {[
+            {
+              icon: <Search01Icon size={17} />,
+              step: "01",
+              title: "Index",
+              body: "Resolve any npm package and its dependency tree straight from the live registry.",
+            },
+            {
+              icon: <GitBranchIcon size={17} />,
+              step: "02",
+              title: "Traverse",
+              body: "A bounded graph walk expands the transitive closure, recording versions and shared maintainers as it goes.",
+            },
+            {
+              icon: <Shield02Icon size={17} />,
+              step: "03",
+              title: "Expose",
+              body: "Real dependent counts and shared maintainers surface the blast radius as an interactive map.",
+            },
+          ].map((item, i) => (
+            <Reveal key={item.step} delay={i * 90}>
+              <div className="clay-card clay-lift h-full p-4 sm:p-5">
+                <div className="flex items-center justify-between">
+                  <IconTile>
+                    <span className="p-2 sm:p-2.5">{item.icon}</span>
+                  </IconTile>
+                  <span className="font-mono text-2xl font-bold text-line-strong/60">{item.step}</span>
+                </div>
+                <h3 className="mt-4 font-display text-base font-bold text-ink-900">{item.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-ink-500">{item.body}</p>
+              </div>
+            </Reveal>
+          ))}
+        </section>
       </main>
+
+      {/* ---------------------------------------------------------- */}
+      {/* Footer ticker + footer                                       */}
+      {/* ---------------------------------------------------------- */}
+      <footer className="mt-auto">
+        <div className="border-y border-line bg-sand-200/60 py-2.5">
+          <div className="flex overflow-hidden">
+            <div className="ticker flex shrink-0 items-center gap-8 whitespace-nowrap pr-8 font-mono text-[11px] tracking-[0.14em] text-ink-400 uppercase">
+              {[...MONITORED, ...MONITORED].map((pkg, i) => (
+                <span key={i} className="flex items-center gap-8">
+                  {pkg}
+                  <span className="text-clay-500">
+                    <HydraMark className="h-3 w-3" />
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-6 sm:flex-row sm:px-5">
+          <div className="flex items-center gap-2.5">
+            <span className="text-clay-600">
+              <HydraMark className="h-5 w-5" />
+            </span>
+            <BrandWordmark className="text-base" />
+          </div>
+          <p className="text-xs text-ink-400">
+            Supply-chain blast radius · live npm registry traversal
+          </p>
+          <div className="flex items-center gap-5">
+            <a href="#" className="nav-link text-xs font-medium">
+              Status
+            </a>
+            <Link href="/docs" className="nav-link text-xs font-medium">
+              Docs
+            </Link>
+            <a href="#" className="nav-link text-xs font-medium">
+              GitHub
+            </a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
