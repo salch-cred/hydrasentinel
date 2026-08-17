@@ -85,6 +85,11 @@ Two options:
 - **Real node on any Docker-capable machine:** run `bash scripts/hydradb-node.sh`
   on a Linux box, WSL, or a free GitHub Codespace (Docker preinstalled), then point
   the app at it via `HYDRADB_URL`. The same code path runs against HydraDB itself.
+  For a one-command proof of the whole loop against the real database, open this
+  repo in a Codespace (`github.com/codespaces/new?repo=salch-cred/hydrasentinel`)
+  and run `bash scripts/verify-real-node.sh` — it starts the node, seeds a real
+  npm slice, ingests a sample app, and confirms it appears in the exposed
+  dependents.
 
 ### Configure
 
