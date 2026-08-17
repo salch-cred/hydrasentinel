@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-clay-bg: #f9f9fb;
+  --color-clay-card: #ffffff;
+  --color-clay-border: rgba(0, 0, 0, 0.06);
+  --color-clay-border-hover: rgba(0, 0, 0, 0.12);
+  --color-clay-accent: #3b82f6;
+  --color-clay-text-muted: #6b7280;
+  
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  --background: #f9f9fb;
+  --foreground: #111111;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom utility classes for the Clay aesthetic */
+@layer utilities {
+  .clay-card {
+    background-color: var(--color-clay-card);
+    border: 1px solid var(--color-clay-border);
+    border-radius: 16px;
+    box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.03), 0 0 3px rgba(0,0,0,0.02);
+    transition: all 0.2s ease-in-out;
+  }
+  
+  .clay-card:hover {
+    border-color: var(--color-clay-border-hover);
+    box-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.06), 0 0 4px rgba(0,0,0,0.03);
+    transform: translateY(-2px);
+  }
+
+  .clay-input {
+    background-color: #f3f4f6;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+  }
+
+  .clay-input:focus {
+    background-color: #ffffff;
+    border-color: var(--color-clay-accent);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    outline: none;
+  }
+  
+  .clay-button {
+    background-color: #111111;
+    color: #ffffff;
+    border-radius: 8px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  
+  .clay-button:hover {
+    background-color: #222222;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+}
