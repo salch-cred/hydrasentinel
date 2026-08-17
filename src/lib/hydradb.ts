@@ -169,9 +169,10 @@ export async function hydradbUpsertTraversal(result: TraverseResult): Promise<bo
 }
 
 /**
- * Transitive reverse dependency closure: which packages in the HydraDB graph
- * depend on `name`, directly or through up to `maxDepth` hops. This is the
- * "09:00 compromise → which services are exposed" question.
+ * Transitive reverse dependency closure: which nodes in the HydraDB graph
+ * (:Package or :Service) depend on `name`, directly or through up to
+ * `maxDepth` hops. This is the "09:00 compromise → which services are
+ * exposed" question.
  */
 export async function hydradbReverseClosure(
   name: string,
@@ -181,12 +182,43 @@ export async function hydradbReverseClosure(
   if (config.disabled) return [];
   const body = await queryAll(
     config,
-    `MATCH (p:Package)-[:DEPENDS_ON*1..${maxDepth}]->(c:Package) ` +
+    `MATCH (p)-[:DEPENDS_ON*1..${maxDepth}]->(c:Package) ` +
       `WHERE c.name = $name RETURN DISTINCT p.name AS name`,
     { name }
   );
   if (!body) return [];
   return extractColumn(body, "name");
+}
+
+/**
+ * Register an application as a :Service node with DEPENDS_ON edges to its
+ * direct dependencies, so reverse closures answer "is YOUR app exposed?".
+ * Best-effort; returns false when no node is reachable.
+ */
+export async function hydradbUpsertService(
+  appName: string,
+  directDeps: string[]
+): Promise<boolean> {
+  const config = loadHydradbConfig();
+  if (config.disabled) return false;
+  const statements: string[] = [
+    `MERGE (s:Service {name: "${esc(appName)}"}) ` +
+      `SET s.kind = "service", s.scannedAt = timestamp()`,
+    ...directDeps.map(
+      (dep) =>
+        `MERGE (s:Service {name: "${esc(appName)}"}) ` +
+        `MERGE (b:Package {name: "${esc(dep)}"}) ` +
+        `MERGE (s)-[:DEPENDS_ON]->(b)`
+    ),
+  ];
+  const BATCH = 6;
+  let ok = 0;
+  for (let i = 0; i < statements.length; i += BATCH) {
+    const batch = statements.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map((q) => postQuery(config, q)));
+    ok += results.filter((r) => r !== null).length;
+  }
+  return ok > 0;
 }
 
 /** Packages + edges currently stored in the HydraDB graph. */

@@ -36,9 +36,16 @@ recording (OBS/QuickTime). The app at http://localhost:3000.
 > "Every scan is persisted as a real graph in HydraDB — packages as nodes,
 > `DEPENDS_ON` edges. That graph is what answers the blast-radius question."
 
-- Scan `expressjs` (or another near-name package) and point at the **typosquat
-  chip**: "edit-distance detection — this name is two keystrokes from express.
-  That's how typosquat attacks get in."
+- Scroll to **Your services** and click **Analyze my app** on the pre-filled
+  package.json: "this is *my* app — 7 dependencies, resolved to real versions."
+  Point at the **riskiest dependency** (debug@4.4.3, 468M downloads/wk) and the
+  exposure path `billing-api → debug`. "That's the 09:00 → 09:06 answer for my
+  own services."
+- Scan `debug` in the explorer and point at the **"5 known dependents exposed"**
+  chip — *billing-api is in the list.* "I pasted my app once, and now every scan
+  tells me if I'm exposed." Then scan `expressjs` and show the **typosquat chip**:
+  "edit-distance detection — two keystrokes from express. That's how typosquat
+  attacks get in."
 - Click **Simulate incident**: "here's the compromise window — the bad version
   was live from 5:46 PM. HydraDB runs the reverse closure: every known package
   that depended on it during that window. That is the 09:00 → 09:06 answer."

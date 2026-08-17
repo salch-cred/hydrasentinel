@@ -25,6 +25,7 @@ import {
 } from "hugeicons-react";
 import type { TraverseResult } from "@/lib/registry";
 import type { IncidentReport } from "@/lib/incident";
+import type { YourServicesReport } from "@/lib/yourservices";
 import { severityOf } from "@/lib/severity";
 import { saveReport } from "@/lib/reports";
 import DependencyGraph from "@/components/DependencyGraph";
@@ -64,6 +65,26 @@ type IncidentState =
   | { status: "loading" }
   | { status: "done"; data: IncidentReport }
   | { status: "error"; error: string };
+
+type YourServicesState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "done"; report: YourServicesReport }
+  | { status: "error"; error: string };
+
+const SAMPLE_MANIFEST = `{
+  "name": "billing-api",
+  "version": "1.4.2",
+  "dependencies": {
+    "express": "^4.19.2",
+    "axios": "^1.6.8",
+    "lodash": "^4.17.21",
+    "debug": "^4.3.4",
+    "moment": "^2.29.4",
+    "uuid": "^9.0.1",
+    "chalk": "^4.1.2"
+  }
+}`;
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
@@ -209,6 +230,8 @@ export default function Home() {
   const [telemetry, setTelemetry] = useState({ resolved: 0, downloads: 0, lastMs: 0, risky: 0 });
   const [hydradbInfo, setHydradbInfo] = useState<HydradbInfo | null>(null);
   const [incident, setIncident] = useState<IncidentState>({ status: "idle" });
+  const [ysManifest, setYsManifest] = useState(SAMPLE_MANIFEST);
+  const [ysState, setYsState] = useState<YourServicesState>({ status: "idle" });
 
   const runAnalysis = async (name: string) => {
     const target = name.trim();
@@ -298,6 +321,27 @@ export default function Home() {
       setIncident({
         status: "error",
         error: err instanceof Error ? err.message : "simulation failed",
+      });
+    }
+  };
+
+  const analyzeYourApp = async () => {
+    if (!ysManifest.trim() || ysState.status === "loading") return;
+    setYsState({ status: "loading" });
+    try {
+      const res = await fetch("/api/yourservices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ manifest: ysManifest }),
+        cache: "no-store",
+      });
+      const json = (await res.json()) as YourServicesReport & { error?: string };
+      if (!json.ok || json.error) throw new Error(json.error ?? "analysis failed");
+      setYsState({ status: "done", report: json });
+    } catch (err) {
+      setYsState({
+        status: "error",
+        error: err instanceof Error ? err.message : "analysis failed",
       });
     }
   };
@@ -425,6 +469,136 @@ export default function Home() {
             delta="flagged"
             tone="clay"
           />
+        </section>
+
+        {/* -------------------------------------------------------- */}
+        {/* Your services: paste package.json                          */}
+        {/* -------------------------------------------------------- */}
+        <section className="mt-8">
+          <Reveal delay={60}>
+            <div className="clay-card overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5 sm:py-4">
+                <div className="flex items-center gap-3">
+                  <IconTile tone="moss">
+                    <span className="p-2">
+                      <ShieldEnergyIcon size={18} />
+                    </span>
+                  </IconTile>
+                  <div>
+                    <h2 className="font-display text-base font-bold tracking-tight text-ink-900">
+                      Your services
+                    </h2>
+                    <p className="mono-label mt-0.5 hidden md:block">
+                      paste package.json — map YOUR exposure
+                    </p>
+                  </div>
+                </div>
+                {ysState.status === "done" && ysState.report.registeredInHydradb && (
+                  <span className="chip whitespace-nowrap px-3 py-1.5 text-moss-600">
+                    <span className="h-1.5 w-1.5 rounded-full bg-moss-500 text-moss-500" />
+                    IN GRAPH
+                  </span>
+                )}
+              </div>
+
+              <div className="p-4 sm:p-5">
+                <textarea
+                  value={ysManifest}
+                  onChange={(e) => setYsManifest(e.target.value)}
+                  rows={8}
+                  spellCheck={false}
+                  className="w-full resize-y rounded-2xl border border-line bg-sand-100/70 p-4 font-mono text-[12px] leading-5 text-ink-900 placeholder:text-ink-400 focus:border-clay-500/50 focus:outline-none"
+                  aria-label="Your package.json"
+                />
+                <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={analyzeYourApp}
+                    disabled={ysState.status === "loading"}
+                    className="clay-btn flex items-center gap-2 px-5 py-2.5 text-sm disabled:opacity-60"
+                  >
+                    {ysState.status === "loading" ? (
+                      <Radar01Icon size={16} className="spin-slow" />
+                    ) : (
+                      <FingerPrintScanIcon size={16} />
+                    )}
+                    {ysState.status === "loading" ? "Analyzing…" : "Analyze my app"}
+                  </button>
+                  <span className="mono-label">resolved against the live registry</span>
+                </div>
+
+                {ysState.status === "error" && (
+                  <p className="mt-4 text-sm text-clay-600">analysis failed — {ysState.error}</p>
+                )}
+                {ysState.status === "done" && ysState.report.ok && (
+                  <div className="anim-rise mt-4 rounded-2xl border border-line bg-sand-100/60 p-4 sm:p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="mono-label text-clay-600">EXPOSURE REPORT</p>
+                      <span className="chip px-2.5 py-1 text-ink-700">
+                        <Layers01Icon size={13} className="text-clay-600" />
+                        {ysState.report.app.directDeps} direct · {ysState.report.app.treeNodes} in tree
+                      </span>
+                    </div>
+                    <p className="mt-3 font-display text-base font-bold text-ink-900">
+                      <span className="font-mono text-clay-600">{ysState.report.app.name}</span>
+                      {" "}· {ysState.report.app.directDeps} direct dependencies resolved
+                    </p>
+
+                    {ysState.report.riskiest ? (
+                      <div className="mt-3">
+                        <p className="text-sm text-ink-500">
+                          Riskiest dependency:{" "}
+                          <span className="font-mono font-semibold text-clay-600">
+                            {ysState.report.riskiest.name}@{ysState.report.riskiest.version}
+                          </span>{" "}
+                          · {ysState.report.riskiest.downloads.toLocaleString("en-US")} downloads/wk
+                        </p>
+                        {ysState.report.riskiest.windowStart && (
+                          <p className="mt-1 text-sm text-ink-500">
+                            If compromised, it was live{" "}
+                            <span className="font-mono text-ink-700">
+                              {fmtDate(ysState.report.riskiest.windowStart)} →{" "}
+                              {fmtDate(ysState.report.riskiest.windowEnd ?? ysState.report.riskiest.windowStart)}
+                            </span>
+                          </p>
+                        )}
+                        {ysState.report.exposedPaths.length > 0 ? (
+                          <div className="mt-3">
+                            <p className="mono-label text-moss-600">
+                              {ysState.report.exposedPaths.length} exposure path{" "}
+                              {ysState.report.exposedPaths.length === 1 ? "" : "s"} from your app
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {ysState.report.exposedPaths.map((p, i) => (
+                                <span key={i} className="chip px-3 py-1.5 font-mono text-[11.5px] text-ink-700">
+                                  <ShieldEnergyIcon size={12} className="text-clay-600" />
+                                  {p.path.join(" → ")}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-sm text-ink-500">
+                            No exposure path found in the resolved tree — your app does not
+                            depend on it transitively.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-ink-500">
+                        Could not resolve a riskiest dependency (registry data unavailable).
+                      </p>
+                    )}
+
+                    <p className="mt-4 text-xs leading-5 text-ink-400">
+                      Your app is registered in the HydraDB graph — scan any package in the
+                      explorer and it appears in the exposed dependents.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Reveal>
         </section>
 
         {/* -------------------------------------------------------- */}

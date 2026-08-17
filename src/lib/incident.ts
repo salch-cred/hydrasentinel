@@ -46,7 +46,7 @@ interface PackumentTime {
   modified?: string;
 }
 
-async function fetchPublishTimeline(name: string): Promise<VersionPoint[]> {
+export async function fetchPublishTimeline(name: string): Promise<VersionPoint[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 9000);
   try {

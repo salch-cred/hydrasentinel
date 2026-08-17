@@ -91,6 +91,23 @@ function evalQuery(cypher, parameters) {
     return { columns: [], rows: [] };
   }
 
+  // MERGE (s:Service {name:"..."}) MERGE (b:Package {name:"..."}) MERGE (s)-[:DEPENDS_ON]->(b)
+  const serviceEdge = q.match(
+    /MERGE\s+\(s:Service\s*\{name:\s*"([^"]+)"\}\)[\s\S]*?MERGE\s+\(b:Package\s*\{name:\s*"([^"]+)"\}\)[\s\S]*?MERGE\s+\(s\)-\[:DEPENDS_ON\]->\(b\)/
+  );
+  if (serviceEdge) {
+    ensureNode(serviceEdge[1]);
+    addEdge(serviceEdge[1], serviceEdge[2]);
+    return { columns: [], rows: [] };
+  }
+
+  // MERGE (s:Service {name:"..."}) SET ...
+  if (/MERGE\s+\(s:Service\s*\{name:\s*"([^"]+)"\}\)\s+SET/i.test(q)) {
+    const m = q.match(/MERGE\s+\(s:Service\s*\{name:\s*"([^"]+)"\}\)/);
+    ensureNode(m[1]);
+    return { columns: [], rows: [] };
+  }
+
   // MERGE (p:Package {name:"..."}) SET p.version = "...", p.downloads = N, ...
   let nodeMatch = q.match(
     /MERGE\s+\(p:Package\s*\{name:\s*"([^"]+)"\}\)\s+SET\s+([\s\S]+)$/
